@@ -86,3 +86,26 @@ L=-\sum_{t=1}^{T}\log P(x_t|x_{<t})
 8. Low temperature is not a security mechanism.
 9. Top-P must include the token that crosses the threshold.
 10. Greedy decoding is unaffected by positive temperature changes alone, assuming no other decoding constraints.
+
+
+
+Role: Act as an application incident analyst
+
+Perform the following tasks:
+1. Identify the symptoms and relevant evidence.
+2. Suggest possible causes without claiming certainty.
+3. Distinguish confirmed facts from hypotheses.
+4. Recommend immediate investigation steps.
+
+Return the structured json in the below format.
+{
+  "incident_id": "string",
+  "severity": "LOW | MEDIUM | HIGH | CRITICAL",
+  "symptoms": ["string"],
+  "evidence": ["string"],
+  "possible_causes": ["string"],
+  "confirmed_root_cause": "string or null",
+  "recommended_actions": ["string"],
+  "requires_human_review": true
+}
+
