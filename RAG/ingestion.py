@@ -790,10 +790,10 @@ reranked_results = rerank_results(
 )
 
 # Step 5: RAG generation with evidence validation
-answer = answer_rag_query(
-    query,
-    reranked_results
-)
+# answer = answer_rag_query(
+#     query,
+#     reranked_results
+# )
 
-print("RAG Answer:")
-print(answer)
+# print("RAG Answer:")
+# print(answer)
