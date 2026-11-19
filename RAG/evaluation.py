@@ -1,17 +1,9 @@
 import math
-from ingestion import (
-    hybrid_chunks,
-    bm25_index,
-    index,
-    reranker,
-    retrieve_bm25,
-    retrieve_chunks,
-    embedded_chunks,
-    reciprocal_rank_fusion,
-    rerank_results
-)
+import sys
 
-from collections import Counter
+from explore_dataset import build_pipeline
+from retrieval import retrieve_bm25, retrieve_chunks, reciprocal_rank_fusion
+from reranking import reranker, rerank_results
 
 evaluation_dataset = [
     {
@@ -124,14 +116,8 @@ evaluation_dataset = [
         "expected_answer": "$92,583 million",
         "expected_page": 174,
         "expected_evidence": [
-            {
-                "metric": "Interest income",
-                "value": "193,933"
-            },
-            {
-                "metric": "Interest expense",
-                "value": "101,350"
-            }
+            {"metric": "Interest income", "value": "193,933"},
+            {"metric": "Interest expense", "value": "101,350"}
         ]
     },
     {
@@ -139,14 +125,8 @@ evaluation_dataset = [
         "expected_answer": "$1,603 million",
         "expected_page": 174,
         "expected_evidence": [
-            {
-                "metric": "Net income",
-                "value": "58,471"
-            },
-            {
-                "metric": "Net income applicable to common stockholders",
-                "value": "56,868"
-            }
+            {"metric": "Net income", "value": "58,471"},
+            {"metric": "Net income applicable to common stockholders", "value": "56,868"}
         ]
     },
     {
@@ -154,14 +134,8 @@ evaluation_dataset = [
         "expected_answer": "$85,759 million",
         "expected_page": 174,
         "expected_evidence": [
-            {
-                "metric": "Total net revenue",
-                "value": "177,556"
-            },
-            {
-                "metric": "Total noninterest expense",
-                "value": "91,797"
-            }
+            {"metric": "Total net revenue", "value": "177,556"},
+            {"metric": "Total noninterest expense", "value": "91,797"}
         ]
     },
     {
@@ -169,43 +143,23 @@ evaluation_dataset = [
         "expected_answer": "$177,556 million",
         "expected_page": 174,
         "expected_evidence": [
-            {
-                "metric": "Net interest income",
-                "value": "92,583"
-            },
-            {
-                "metric": "Noninterest revenue",
-                "value": "84,973"
-            }
+            {"metric": "Net interest income", "value": "92,583"},
+            {"metric": "Noninterest revenue", "value": "84,973"}
         ]
     }
 ]
 
 unsupported_questions = [
-    {
-        "question": "What was JPMorgan's net income in 2030?",
-        "expected_behavior": "abstain"
-    },
-    {
-        "question": "What was JPMorgan's net income in 2025?",
-        "expected_behavior": "abstain"
-    },
-    {
-        "question": "What was JPMorgan's revenue in 2010?",
-        "expected_behavior": "abstain"
-    },
-    {
-        "question": "How many employees did JPMorgan hire in 2024?",
-        "expected_behavior": "abstain"
-    },
-    {
-        "question": "What was JPMorgan's market share in the Indian banking industry in 2024?",
-        "expected_behavior": "abstain"
-    }
+    {"question": "What was JPMorgan's net income in 2030?", "expected_behavior": "abstain"},
+    {"question": "What was JPMorgan's net income in 2025?", "expected_behavior": "abstain"},
+    {"question": "What was JPMorgan's revenue in 2010?", "expected_behavior": "abstain"},
+    {"question": "How many employees did JPMorgan hire in 2024?", "expected_behavior": "abstain"},
+    {"question": "What was JPMorgan's market share in the Indian banking industry in 2024?", "expected_behavior": "abstain"}
 ]
 
+
 # ==========================================================
-# 3. GROUND-TRUTH HELPERS
+# GROUND-TRUTH HELPERS
 # ==========================================================
 
 def get_expected_evidence(evaluation_item):
@@ -242,15 +196,11 @@ def has_complete_evidence(retrieved_chunks, evaluation_item):
 
     evidence = get_expected_evidence(evaluation_item)
 
-    retrieved_text = [
-        chunk["chunk_text"].lower()
-        for chunk in retrieved_chunks
-    ]
+    retrieved_text = [chunk["chunk_text"].lower() for chunk in retrieved_chunks]
 
     return all(
         any(
-            item["metric"].lower() in text
-            and item["value"] in text
+            item["metric"].lower() in text and item["value"] in text
             for text in retrieved_text
         )
         for item in evidence
@@ -258,41 +208,27 @@ def has_complete_evidence(retrieved_chunks, evaluation_item):
 
 
 # ==========================================================
-# 4. RETRIEVAL PIPELINE
+# RETRIEVAL PIPELINE
 # ==========================================================
 
-def retrieve_all_methods(query):
+def retrieve_all_methods(query, pipe):
 
-    # A. BM25 retrieval
+    chunks = pipe["chunks"]
+
     bm25_results = retrieve_bm25(
-        query,
-        bm25_index,
-        hybrid_chunks,
-        top_k=20
+        query, pipe["bm25_index"], chunks, top_k=20
     )
 
-    # B. Semantic retrieval
     semantic_results = retrieve_chunks(
-        query,
-        index,
-        embedded_chunks,
-        top_k=20
+        query, pipe["vector_index"], chunks, top_k=20
     )
 
-    # C. Hybrid retrieval using RRF
     hybrid_candidates = reciprocal_rank_fusion(
-        bm25_results,
-        semantic_results,
-        hybrid_chunks,
-        top_k=20
+        bm25_results, semantic_results, chunks, top_k=20
     )
 
-    # D. Cross-encoder reranking
     reranked_results = rerank_results(
-        query,
-        hybrid_candidates,
-        reranker,
-        top_k=5
+        query, hybrid_candidates, reranker, top_k=5
     )
 
     return {
@@ -304,14 +240,10 @@ def retrieve_all_methods(query):
 
 
 # ==========================================================
-# 5. EVALUATION METRICS
+# EVALUATION METRICS
 # ==========================================================
 
-def calculate_recall_at_k(
-    retrieved_chunks,
-    relevant_chunk_ids,
-    k=5
-):
+def calculate_recall_at_k(retrieved_chunks, relevant_chunk_ids, k=5):
 
     if k <= 0:
         raise ValueError("k must be positive")
@@ -319,57 +251,31 @@ def calculate_recall_at_k(
     if not relevant_chunk_ids:
         return 0.0
 
-    retrieved_ids = {
-        chunk["chunk_id"]
-        for chunk in retrieved_chunks[:k]
-    }
+    retrieved_ids = {chunk["chunk_id"] for chunk in retrieved_chunks[:k]}
 
-    relevant_retrieved = retrieved_ids.intersection(
-        relevant_chunk_ids
-    )
-
-    return len(relevant_retrieved) / len(relevant_chunk_ids)
+    return len(retrieved_ids & relevant_chunk_ids) / len(relevant_chunk_ids)
 
 
-def calculate_reciprocal_rank(
-    retrieved_chunks,
-    relevant_chunk_ids
-):
+def calculate_reciprocal_rank(retrieved_chunks, relevant_chunk_ids):
 
     for rank, chunk in enumerate(retrieved_chunks, start=1):
-
         if chunk["chunk_id"] in relevant_chunk_ids:
             return 1 / rank
 
     return 0.0
 
 
-def calculate_precision_at_k(
-    retrieved_chunks,
-    relevant_chunk_ids,
-    k=5
-):
+def calculate_precision_at_k(retrieved_chunks, relevant_chunk_ids, k=5):
 
     if k <= 0:
         raise ValueError("k must be positive")
 
-    retrieved_ids = {
-        chunk["chunk_id"]
-        for chunk in retrieved_chunks[:k]
-    }
+    retrieved_ids = {chunk["chunk_id"] for chunk in retrieved_chunks[:k]}
 
-    relevant_retrieved = retrieved_ids.intersection(
-        relevant_chunk_ids
-    )
-
-    return len(relevant_retrieved) / k
+    return len(retrieved_ids & relevant_chunk_ids) / k
 
 
-def calculate_ndcg_at_k(
-    retrieved_chunks,
-    relevant_chunk_ids,
-    k=5
-):
+def calculate_ndcg_at_k(retrieved_chunks, relevant_chunk_ids, k=5):
 
     if k <= 0:
         raise ValueError("k must be positive")
@@ -387,9 +293,7 @@ def calculate_ndcg_at_k(
         for rank, rel in enumerate(relevance, start=1)
     )
 
-    ideal_relevance = [
-        1
-    ] * min(len(relevant_chunk_ids), k)
+    ideal_relevance = [1] * min(len(relevant_chunk_ids), k)
 
     idcg = sum(
         rel / math.log2(rank + 1)
@@ -400,17 +304,14 @@ def calculate_ndcg_at_k(
 
 
 # ==========================================================
-# 6. EVALUATION RUNNER
+# EVALUATION RUNNER
 # ==========================================================
 
-def evaluate_retrieval(dataset, corpus):
+def evaluate_retrieval(dataset, pipe):
 
-    methods = [
-        "BM25",
-        "Semantic",
-        "Hybrid RRF",
-        "Hybrid + Reranker"
-    ]
+    corpus = pipe["chunks"]
+
+    methods = ["BM25", "Semantic", "Hybrid RRF", "Hybrid + Reranker"]
 
     evaluation_scores = {
         method: {
@@ -427,125 +328,102 @@ def evaluate_retrieval(dataset, corpus):
 
         query = item["question"]
 
-        # print(f"\n{'=' * 65}")
-        # print(f"Question {question_number}: {query}")
-
-        # Find all ground-truth relevant chunks
-        relevant_chunks = [
-            chunk
-            for chunk in corpus
-            if is_relevant_chunk(chunk, item)
-        ]
-
         relevant_chunk_ids = {
             chunk["chunk_id"]
-            for chunk in relevant_chunks
+            for chunk in corpus
+            if is_relevant_chunk(chunk, item)
         }
 
-        # if not relevant_chunk_ids:
-        #     print("WARNING: No ground-truth chunks found.")
-        #     continue
+        if not relevant_chunk_ids:
+            print(f"WARNING Q{question_number}: no ground-truth chunks found "
+                  f"for: {query}")
 
-        # print("Expected relevant chunks:", len(relevant_chunk_ids))
+        retrieval_methods = retrieve_all_methods(query, pipe)
 
-        # Run all retrieval methods
-        retrieval_methods = retrieve_all_methods(query)
-
-        # Evaluate each retrieval method
         for method, results in retrieval_methods.items():
 
-            recall = calculate_recall_at_k(
-                results,
-                relevant_chunk_ids,
-                k=5
+            evaluation_scores[method]["recall"].append(
+                calculate_recall_at_k(results, relevant_chunk_ids, k=5)
             )
-
-            mrr = calculate_reciprocal_rank(
-                results,
-                relevant_chunk_ids
+            evaluation_scores[method]["mrr"].append(
+                calculate_reciprocal_rank(results, relevant_chunk_ids)
             )
-
-            precision = calculate_precision_at_k(
-                results,
-                relevant_chunk_ids,
-                k=5
+            evaluation_scores[method]["precision"].append(
+                calculate_precision_at_k(results, relevant_chunk_ids, k=5)
             )
-
-            ndcg = calculate_ndcg_at_k(
-                results,
-                relevant_chunk_ids,
-                k=5
+            evaluation_scores[method]["ndcg"].append(
+                calculate_ndcg_at_k(results, relevant_chunk_ids, k=5)
             )
-
-            complete = has_complete_evidence(
-                results,
-                item
+            evaluation_scores[method]["complete_evidence"].append(
+                has_complete_evidence(results, item)
             )
-
-            evaluation_scores[method]["recall"].append(recall)
-            evaluation_scores[method]["mrr"].append(mrr)
-            evaluation_scores[method]["precision"].append(precision)
-            evaluation_scores[method]["ndcg"].append(ndcg)
-            evaluation_scores[method]["complete_evidence"].append(complete)
-
-            # print(
-            #     f"{method}: "
-            #     f"Recall@5={recall:.2f}, "
-            #     f"MRR={mrr:.2f}, "
-            #     f"Precision@5={precision:.2f}, "
-            #     f"NDCG@5={ndcg:.2f}, "
-            #     f"Complete Evidence={complete}"
-            # )
 
     return evaluation_scores
 
 
-# ==========================================================
-# 7. RESULTS SUMMARY
-# ==========================================================
-
 def print_evaluation_summary(evaluation_scores):
 
-    # print("\n\n")
-    # print("=" * 75)
-    # print("FINAL RETRIEVAL EVALUATION")
-    # print("=" * 75)
+    print("\n" + "=" * 75)
+    print("FINAL RETRIEVAL EVALUATION")
+    print("=" * 75)
 
     for method, scores in evaluation_scores.items():
 
         if not scores["recall"]:
             continue
 
-        total_questions = len(scores["recall"])
-
-        avg_recall = sum(scores["recall"]) / total_questions
-        avg_mrr = sum(scores["mrr"]) / total_questions
-        avg_precision = sum(scores["precision"]) / total_questions
-        avg_ndcg = sum(scores["ndcg"]) / total_questions
-
+        total = len(scores["recall"])
         complete_count = sum(scores["complete_evidence"])
-        evidence_rate = complete_count / total_questions
 
-        # print(f"\nMethod: {method}")
-        # print(f"Questions evaluated: {total_questions}")
-        # print(f"Average Recall@5: {avg_recall:.4f}")
-        # print(f"Average MRR: {avg_mrr:.4f}")
-        # print(f"Average Precision@5: {avg_precision:.4f}")
-        # print(f"Average NDCG@5: {avg_ndcg:.4f}")
-        # print(
-        #     f"Complete Evidence Rate: "
-        #     f"{complete_count}/{total_questions} "
-        #     f"({evidence_rate:.2%})"
-        # )
+        print(f"\nMethod: {method}")
+        print(f"Questions evaluated: {total}")
+        print(f"Average Recall@5:    {sum(scores['recall']) / total:.4f}")
+        print(f"Average MRR:         {sum(scores['mrr']) / total:.4f}")
+        print(f"Average Precision@5: {sum(scores['precision']) / total:.4f}")
+        print(f"Average NDCG@5:      {sum(scores['ndcg']) / total:.4f}")
+        print(f"Complete Evidence:   {complete_count}/{total} "
+              f"({complete_count / total:.2%})")
 
 
 # ==========================================================
-# 8. EXECUTION
+# OPTIONAL: ABSTENTION TEST (needs Ollama running)
 # ==========================================================
 
-evaluation_scores = evaluate_retrieval(
-    evaluation_dataset,
-    hybrid_chunks
-)
+def evaluate_abstention(questions, pipe):
 
-# print_evaluation_summary(evaluation_scores)
+    from validation import answer_rag_query
+
+    correct = 0
+
+    for item in questions:
+
+        query = item["question"]
+
+        results = retrieve_all_methods(query, pipe)["Hybrid + Reranker"]
+        response = answer_rag_query(query, results)
+
+        abstained = response.get("insufficient_evidence") is True
+        correct += abstained
+
+        print(f"[{'OK ' if abstained else 'BAD'}] {query}")
+        print(f"      -> {response.get('answer')}")
+
+    print(f"\nAbstained correctly: {correct}/{len(questions)}")
+
+
+# ==========================================================
+# EXECUTION
+# ==========================================================
+
+if __name__ == "__main__":
+
+    pipe = build_pipeline()
+
+    scores = evaluate_retrieval(evaluation_dataset, pipe)
+    print_evaluation_summary(scores)
+
+    if "--abstain" in sys.argv:
+        print("\n" + "=" * 75)
+        print("ABSTENTION TEST")
+        print("=" * 75)
+        evaluate_abstention(unsupported_questions, pipe)
