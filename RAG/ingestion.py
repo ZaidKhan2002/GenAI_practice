@@ -2,6 +2,7 @@ import re
 import numpy as np
 import faiss
 import ollama
+import json
 
 from collections import Counter
 from explore_dataset import documents
@@ -671,7 +672,6 @@ def rerank_results(query, candidates, reranker, top_k=5):
 # --------------------------------------------------
 
 def create_rag_prompt(query, retrieved_chunks):
-
     context = ""
 
     for rank, result in enumerate(retrieved_chunks, start=1):
@@ -683,36 +683,202 @@ Chunk type: {result['chunk_type']}
 
 Content:
 {result['chunk_text']}
-
 """
 
     prompt = f"""
 You are a financial document analysis assistant.
 
-Answer the user's question using ONLY the provided context.
+Answer the question using ONLY the provided context.
 
 Rules:
-1. Identify the financial metric specifically requested.
-2. Prefer the primary consolidated financial statement
-   over supplementary statements when both are available.
-3. Do not mix figures from different financial statements.
-4. Do not include related financial metrics unless requested.
-5. Preserve financial figures and reporting periods accurately.
-6. Cite the exact page supporting your answer.
-7. Keep the answer concise.
-8. If sufficient evidence is unavailable, say:
-   "The provided documents do not contain sufficient information to answer this question."
+1. Never invent financial figures or reporting periods.
+2. Identify the exact financial metric requested.
+3. Prefer the primary consolidated financial statement.
+4. Do not mix figures from different statements.
+5. Preserve the original financial value and unit.
+6. Include only sources that support your answer.
+7. If evidence is insufficient, do not guess.
+8. Return valid JSON only. Do not use Markdown code fences.
+9. Cite the minimum number of sources needed to support the answer.
+10. For questions requiring multiple financial metrics, include every required metric in supporting_evidence.
+11. Each supporting metric must have its own source document and page number.
+12. For calculation questions, calculate only when all required financial values are available.
+13. Use the requested arithmetic operation and preserve the reporting unit.
+14. The top-level metric and value should contain the primary metric and final result when a calculation is requested.
+15. For single-metric questions, supporting_evidence should still contain the supporting financial figure.
+16. If evidence is insufficient, return an empty supporting_evidence array and null calculation fields.
+17. For questions without calculations, set calculation.operation and calculation.result to null.
+
+Required JSON structure:
+{{
+    "answer": "string",
+    "metric": "string or null",
+    "value": "string or null",
+    "year": "integer or null",
+    "unit": "string or null",
+    "sources": [
+        {{
+            "document_id": "string",
+            "page": "integer"
+        }}
+    ],
+    "supporting_evidence": [
+        {{
+            "metric": "string",
+            "value": "string",
+            "year": "integer",
+            "document_id": "string",
+            "page": "integer"
+        }}
+    ],
+    "calculation": {{
+        "operation": "subtract or null",
+        "result": "string or null"
+    }},
+    "insufficient_evidence": "boolean",
+    "error": null
+}}
+
+If evidence is insufficient:
+- Set insufficient_evidence to true.
+- Set answer to a brief explanation.
+- Set metric, value, year and unit to null.
+- Set sources to an empty array.
+- Successful answers must set error to null
 
 Context:
 {context}
 
 Question:
 {query}
-
-Answer:
 """
-
     return prompt
+
+# --------------------------------------------------
+# STEP 18: RAG VALIDATIONS
+# --------------------------------------------------
+
+def parse_model_response(raw_response):
+
+    try:
+        data = json.loads(raw_response)
+        if data["error"] is not None and not isinstance(data["error"], str):
+            raise ValueError("error must be a string or null")
+
+    except json.JSONDecodeError as error:
+        raise ValueError(
+            f"LLM returned invalid JSON: {error}"
+        )
+
+    required_fields = {
+        "answer",
+        "metric",
+        "value",
+        "year",
+        "unit",
+        "sources",
+        "supporting_evidence",
+        "calculation",
+        "insufficient_evidence",
+        "error"
+    }
+
+    # Step 1: Validate the top-level structure
+    if not isinstance(data, dict):
+        raise ValueError("Response must be a JSON object")
+
+    if set(data.keys()) != required_fields:
+        raise ValueError("Missing or unexpected fields")
+
+    # Step 2: Validate individual fields
+    if not isinstance(data["answer"], str):
+        raise ValueError("answer must be a string")
+
+    for field in ["metric", "value", "unit"]:
+        if data[field] is not None and not isinstance(data[field], str):
+            raise ValueError(f"{field} must be a string or null")
+
+    if data["year"] is not None and type(data["year"]) is not int:
+        raise ValueError("year must be an integer or null")
+
+    if not isinstance(data["sources"], list):
+        raise ValueError("sources must be a list")
+
+    if type(data["insufficient_evidence"]) is not bool:
+        raise ValueError("insufficient_evidence must be a boolean")
+
+    # Step 3: Validate source objects
+    for source in data["sources"]:
+        if not isinstance(source, dict):
+            raise ValueError("Each source must be an object")
+
+        if (
+            not isinstance(source.get("document_id"), str)
+            or type(source.get("page")) is not int
+        ):
+            raise ValueError("Invalid source information")
+
+    # Step 4: Validate supporting evidence
+    if not isinstance(data["supporting_evidence"], list):
+        raise ValueError("supporting_evidence must be a list")
+
+    for evidence in data["supporting_evidence"]:
+
+        if not isinstance(evidence, dict):
+            raise ValueError("Each evidence item must be an object")
+
+        if (
+            not isinstance(evidence.get("metric"), str)
+            or not isinstance(evidence.get("value"), str)
+            or type(evidence.get("year")) is not int
+            or not isinstance(evidence.get("document_id"), str)
+            or type(evidence.get("page")) is not int
+        ):
+            raise ValueError("Invalid supporting evidence")
+
+    # Step 5: Validate calculation
+    calculation = data["calculation"]
+
+    if not isinstance(calculation, dict):
+        raise ValueError("calculation must be an object")
+
+    if set(calculation.keys()) != {"operation", "result"}:
+        raise ValueError("Invalid calculation fields")
+
+    if calculation["operation"] not in ["subtract", None]:
+        raise ValueError("Unsupported calculation operation")
+
+    if (
+        calculation["result"] is not None
+        and not isinstance(calculation["result"], str)
+    ):
+        raise ValueError("Calculation result must be a string or null")
+
+    if calculation["operation"] is None and calculation["result"] is not None:
+        raise ValueError("Result must be null when operation is null")
+
+    if calculation["operation"] is not None and calculation["result"] is None:
+        raise ValueError("Result is required when an operation is specified")
+        
+    # Step 6: Return the validated dictionary
+    return data
+
+def create_generation_error_response(error):
+    return {
+        "answer": "Unable to generate an answer due to a processing error.",
+        "metric": None,
+        "value": None,
+        "year": None,
+        "unit": None,
+        "sources": [],
+        "insufficient_evidence": False,
+        "supporting_evidence": [],
+        "calculation": {
+            "operation": None,
+            "result": None
+        },
+        "error": str(error)
+    }
 
 def has_year_evidence(query, retrieved_chunks):
 
@@ -729,48 +895,272 @@ def has_year_evidence(query, retrieved_chunks):
 
     return False
 
+def validate_generated_value(response, retrieved_chunks):
+
+    metric = response.get("metric")
+    value = response.get("value")
+    year = response.get("year")
+
+    if not metric or not value or year is None:
+        return False
+
+    expected_value = str(value).replace("$", "").replace(",", "").strip()
+
+    for chunk in retrieved_chunks:
+
+        text = chunk["chunk_text"]
+
+        if metric.lower() not in text.lower():
+            continue
+
+        if str(year) not in text:
+            continue
+
+        normalized_text = text.replace(",", "").replace("$", "")
+
+        if expected_value in normalized_text:
+            return True
+
+    return False
+
+def validate_sources(response, retrieved_chunks):
+
+    metric = response.get("metric")
+    value = response.get("value")
+    year = response.get("year")
+    sources = response.get("sources", [])
+
+    if not metric or not value or year is None or not sources:
+        return False
+
+    normalized_value = (
+        str(value)
+        .replace("$", "")
+        .replace(",", "")
+        .strip()
+    )
+
+    # Find retrieved chunks supporting the answer
+    supporting_chunks = []
+
+    for chunk in retrieved_chunks:
+
+        text = chunk["chunk_text"]
+
+        normalized_text = (
+            text.replace("$", "")
+            .replace(",", "")
+        )
+
+        if (
+            metric.lower() in text.lower()
+            and str(year) in text
+            and normalized_value in normalized_text
+        ):
+            supporting_chunks.append(chunk)
+
+    if not supporting_chunks:
+        return False
+
+    # Verify every cited source against supporting chunks
+    for source in sources:
+
+        source_exists = any(
+            source["document_id"] == chunk["document_id"]
+            and source["page"] == chunk["page"]
+            for chunk in supporting_chunks
+        )
+
+        if not source_exists:
+            return False
+
+    return True
+
+def validate_metric_year_unit(response, retrieved_chunks):
+
+    if not validate_generated_value(response, retrieved_chunks):
+        return False
+
+    unit = response.get("unit")
+
+    if not unit:
+        return False
+
+    unit_aliases = {
+        "millions": ["in millions", "million"],
+        "billions": ["in billions", "billion"],
+        "thousands": ["in thousands", "thousand"]
+    }
+
+    expected_units = unit_aliases.get(unit.lower(), [unit.lower()])
+
+    for chunk in retrieved_chunks:
+
+        text = chunk["chunk_text"].lower()
+
+        if any(alias in text for alias in expected_units):
+            if (
+                response["metric"].lower() in text
+                and str(response["year"]) in text
+            ):
+                return True
+
+    return False
+
+def validate_multiple_evidence(expected_evidence, retrieved_chunks):
+    
+    if not expected_evidence:
+        return False
+
+    for evidence in expected_evidence:
+
+        metric = evidence["metric"].lower()
+        value = evidence["value"].replace(",", "")
+
+        evidence_found = False
+
+        for chunk in retrieved_chunks:
+
+            text = chunk["chunk_text"].lower()
+            normalized_text = text.replace(",", "")
+
+            if metric in text and value in normalized_text:
+                evidence_found = True
+                break
+
+        if not evidence_found:
+            return False
+
+    return True
+
+def create_abstention_response(reason):
+    return {
+        "answer": reason,
+        "metric": None,
+        "value": None,
+        "year": None,
+        "unit": None,
+        "sources": [],
+        "supporting_evidence": [],
+        "calculation": {
+            "operation": None,
+            "result": None
+        },
+        "insufficient_evidence": True
+    }
+
+def generate_answer(prompt):
+
+    try:
+        response = ollama.chat(
+            model="qwen3.5:4b",
+            messages=[
+                {"role": "user", "content": prompt}
+            ],
+            options={"temperature": 0}
+        )
+
+        raw_response = response["message"]["content"]
+
+        return parse_model_response(raw_response)
+
+    except Exception as error:
+        return create_generation_error_response(error)
+
 def answer_rag_query(query, retrieved_chunks):
 
     if not retrieved_chunks:
-        return "No relevant information was retrieved."
+        return create_abstention_response(
+            "No relevant information was retrieved."
+        )
 
     if not has_year_evidence(query, retrieved_chunks):
-        return (
+        return create_abstention_response(
             "The retrieved document context does not contain "
             "financial information for the requested year."
         )
 
     prompt = create_rag_prompt(query, retrieved_chunks)
 
-    return generate_answer(prompt)
+    response = generate_answer(prompt)
 
-def generate_answer(prompt):
+    # Stop if LLM generation failed
+    if response.get("error") is not None:
+        return response
 
-    response = ollama.chat(
-        model="qwen3.5:4b",
-        messages=[
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        options={
-            "temperature": 0
-        }
-    )
+    # Stop if LLM reports insufficient evidence
+    if response.get("insufficient_evidence"):
+        return response
 
-    return response["message"]["content"]
+    # Validate supporting evidence
+    if not validate_multiple_evidence(
+        response["supporting_evidence"],
+        retrieved_chunks
+    ):
+        return create_abstention_response(
+            "One or more supporting financial figures "
+            "could not be verified."
+        )
 
-query = "What was JPMorgan's net income in 2024?"
+    # Check whether this is a calculation question
+    if response["calculation"]["operation"] is not None:
+
+        evidence_values = [
+            int(item["value"].replace(",", "").replace("$", "").strip())
+            for item in response["supporting_evidence"]
+        ]
+
+        calculated_result = int(
+            response["calculation"]["result"].replace(",", "").replace("$", "").strip()
+        )
+
+        if not validate_calculation(calculated_result, evidence_values):
+            return create_abstention_response(
+                "The calculated result could not be verified."
+            )
+
+        return response
+
+    # Validate generated financial value
+    if not validate_generated_value(response, retrieved_chunks):
+        return create_abstention_response(
+            "The generated financial value could not be verified "
+            "against the retrieved document evidence."
+        )
+
+    # Validate source citations
+    if not validate_sources(response, retrieved_chunks):
+        return create_abstention_response(
+            "The generated source citations could not be verified "
+            "against the retrieved document evidence."
+        )
+
+    # Validate metric, year and unit
+    if not validate_metric_year_unit(response, retrieved_chunks):
+        return create_abstention_response(
+            "The generated metric, year or unit could not be verified."
+        )
+
+    return response
+
+def validate_calculation(value, evidence_values):
+    if len(evidence_values) != 2:
+        return False
+
+    expected = evidence_values[0] - evidence_values[1]
+
+    return value == expected
+
+query = "What was the difference between JPMorgan's total net revenue and total noninterest expense in 2024?"
 
 # Step 1: BM25 retrieval
 bm25_results = retrieve_bm25(
-    query, bm25_index, hybrid_chunks, top_k=20
+    query, bm25_index, hybrid_chunks, top_k=10
 )
 
 # Step 2: FAISS semantic retrieval
 semantic_results = retrieve_chunks(
-    query, index, embedded_chunks, top_k=20
+    query, index, embedded_chunks, top_k=10
 )
 
 # Step 3: Reciprocal Rank Fusion
@@ -778,7 +1168,7 @@ hybrid_results = reciprocal_rank_fusion(
     bm25_results,
     semantic_results,
     hybrid_chunks,
-    top_k=20
+    top_k=10
 )
 
 # Step 4: Cross-encoder reranking
@@ -786,14 +1176,14 @@ reranked_results = rerank_results(
     query,
     hybrid_results,
     reranker,
-    top_k=5
+    top_k=3
 )
 
 # Step 5: RAG generation with evidence validation
-# answer = answer_rag_query(
-#     query,
-#     reranked_results
-# )
+answer = answer_rag_query(
+    query,
+    reranked_results
+)
 
-# print("RAG Answer:")
-# print(answer)
+print("RAG Answer:")
+print(answer)

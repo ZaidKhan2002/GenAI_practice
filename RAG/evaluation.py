@@ -427,8 +427,8 @@ def evaluate_retrieval(dataset, corpus):
 
         query = item["question"]
 
-        print(f"\n{'=' * 65}")
-        print(f"Question {question_number}: {query}")
+        # print(f"\n{'=' * 65}")
+        # print(f"Question {question_number}: {query}")
 
         # Find all ground-truth relevant chunks
         relevant_chunks = [
@@ -442,11 +442,11 @@ def evaluate_retrieval(dataset, corpus):
             for chunk in relevant_chunks
         }
 
-        if not relevant_chunk_ids:
-            print("WARNING: No ground-truth chunks found.")
-            continue
+        # if not relevant_chunk_ids:
+        #     print("WARNING: No ground-truth chunks found.")
+        #     continue
 
-        print("Expected relevant chunks:", len(relevant_chunk_ids))
+        # print("Expected relevant chunks:", len(relevant_chunk_ids))
 
         # Run all retrieval methods
         retrieval_methods = retrieve_all_methods(query)
@@ -488,14 +488,14 @@ def evaluate_retrieval(dataset, corpus):
             evaluation_scores[method]["ndcg"].append(ndcg)
             evaluation_scores[method]["complete_evidence"].append(complete)
 
-            print(
-                f"{method}: "
-                f"Recall@5={recall:.2f}, "
-                f"MRR={mrr:.2f}, "
-                f"Precision@5={precision:.2f}, "
-                f"NDCG@5={ndcg:.2f}, "
-                f"Complete Evidence={complete}"
-            )
+            # print(
+            #     f"{method}: "
+            #     f"Recall@5={recall:.2f}, "
+            #     f"MRR={mrr:.2f}, "
+            #     f"Precision@5={precision:.2f}, "
+            #     f"NDCG@5={ndcg:.2f}, "
+            #     f"Complete Evidence={complete}"
+            # )
 
     return evaluation_scores
 
@@ -506,10 +506,10 @@ def evaluate_retrieval(dataset, corpus):
 
 def print_evaluation_summary(evaluation_scores):
 
-    print("\n\n")
-    print("=" * 75)
-    print("FINAL RETRIEVAL EVALUATION")
-    print("=" * 75)
+    # print("\n\n")
+    # print("=" * 75)
+    # print("FINAL RETRIEVAL EVALUATION")
+    # print("=" * 75)
 
     for method, scores in evaluation_scores.items():
 
@@ -526,17 +526,17 @@ def print_evaluation_summary(evaluation_scores):
         complete_count = sum(scores["complete_evidence"])
         evidence_rate = complete_count / total_questions
 
-        print(f"\nMethod: {method}")
-        print(f"Questions evaluated: {total_questions}")
-        print(f"Average Recall@5: {avg_recall:.4f}")
-        print(f"Average MRR: {avg_mrr:.4f}")
-        print(f"Average Precision@5: {avg_precision:.4f}")
-        print(f"Average NDCG@5: {avg_ndcg:.4f}")
-        print(
-            f"Complete Evidence Rate: "
-            f"{complete_count}/{total_questions} "
-            f"({evidence_rate:.2%})"
-        )
+        # print(f"\nMethod: {method}")
+        # print(f"Questions evaluated: {total_questions}")
+        # print(f"Average Recall@5: {avg_recall:.4f}")
+        # print(f"Average MRR: {avg_mrr:.4f}")
+        # print(f"Average Precision@5: {avg_precision:.4f}")
+        # print(f"Average NDCG@5: {avg_ndcg:.4f}")
+        # print(
+        #     f"Complete Evidence Rate: "
+        #     f"{complete_count}/{total_questions} "
+        #     f"({evidence_rate:.2%})"
+        # )
 
 
 # ==========================================================
@@ -548,4 +548,4 @@ evaluation_scores = evaluate_retrieval(
     hybrid_chunks
 )
 
-print_evaluation_summary(evaluation_scores)
+# print_evaluation_summary(evaluation_scores)
