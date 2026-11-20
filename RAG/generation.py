@@ -288,31 +288,12 @@ def _clean_llm_output(raw):
     return raw.strip()
 
 
-# def generate_answer(prompt):
-
-#     try:
-#         response = _chat(prompt)
-#         raw_response = response["message"]["content"]
-#         return parse_model_response(_clean_llm_output(raw_response))
-
-#     except Exception as error:
-#         return create_generation_error_response(error)
-
 def generate_answer(prompt):
 
     try:
         response = _chat(prompt)
         raw_response = response["message"]["content"]
-
-        print("\nRAW LLM RESPONSE:\n")
-        print(raw_response)
-
-        cleaned_response = _clean_llm_output(raw_response)
-
-        print("\nCLEANED LLM RESPONSE:\n")
-        print(cleaned_response)
-
-        return parse_model_response(cleaned_response)
+        return parse_model_response(_clean_llm_output(raw_response))
 
     except Exception as error:
         return create_generation_error_response(error)
